@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="iso-8859-1" ?>
+
+<project name="MobileMedia VP - Version 06" default="full-build" basedir=".">
+
+	<!-- Define all relevant properties here. -->
+    <property name="workspace.dir" location="${basedir}"/> 
+
+	<property file="labBuild.properties"/>
+
+	<property name="antenna.jar" location="${antenna.home}/${antenna.name}"/> 
+	
+	<!-- Define Antenna properties -->
+	<property name="antenna.properties" location="${antenna.home}/antenna.properties"/>
+	<property file="antenna.properties"/>
+
+    <property name="ajc.adapter" value="org.aspectj.tools.ant.taskdefs.Ajc11CompilerAdapter"/>
+	
+	<property name="aspectjtools.jar" location="${aspectj.lib.dir}/aspectjtools.jar"/> 
+	
+	<!-- Define core MIDP libraries -->
+	<!-- MIDP 1.0 CLDC 1.0 -->
+	<!-- <property name="midpapi10.jar" location="${wtk.home}\lib\midpapi10.jar"/> -->
+	<!-- <property name="cldcapi10.jar" location="${wtk.home}\lib\cldcapi10.jar"/>    -->
+
+	<!-- MIDP 2.0 CLDC 1.1 -->
+	<property name="midpapi21.jar" location="${wtk.home}//lib//midpapi21.jar"/>
+	<property name="cldcapi11.jar" location="${wtk.home}//lib//cldcapi11.jar"/>
+		<!-- <property name="cldcapi11.jar" location="${wtk.home}\lib\cldcapi11.jar"/> -->
+
+	<property name="wma11.jar" location="${wtk.home}/lib/wma11.jar"/>
+	<property name="mmapi.jar" location="${wtk.home}/lib/mmapi.jar"/>
+		
+	
+	<!-- Set the classpath to be used -->
+	<property name="build.classpath" value="${midpapi21.jar};${cldcapi11.jar};${aspectjrt.jar};${antenna.jar};${wma11.jar};${mmapi.jar}"/>
+																								
+
+	<!-- Directories created or used during the build process -->
+	<property name="midp-compiled.dir" location="${workspace.dir}/midp-compiled"/>
+	<property name="src.dir" location="${workspace.dir}/src"/>
+	<property name="ajc-compiled.dir" location="${workspace.dir}/ajc-compiled"/> 
+	<property name="preverified.dir" location="${workspace.dir}/preverified"/> 
+	<property name="jar.dir" location="${workspace.dir}/jars"/> 
+	<property name="images.dir" location="${workspace.dir}/images"/> 
+
+	<!-- This resource is required for Antenna based tasks -->
+	<taskdef resource="antenna.properties" classpath="${antenna.jar}"/>
+	 
+    <!-- ============================================================= -->
+    <!-- Full Build (Default Target)								-->
+    <!-- ============================================================= -->
+ 	<target name="full-build">
+ 		<antcall target="clean" />
+		<antcall target="aspectj-compile" /> 		
+ 		<antcall target="copy-ajruntime-classes" />
+ 		<antcall target="copy-image-files" />
+		<antcall target="midp-preverify" />
+		<antcall target="make-jar" />
+ 		<antcall target="run-default-phone-emulator" />
+    </target>
+
+    <!-- ============================================================= -->
+    <!-- Clean all targets                                     			-->
+    <!-- ============================================================= -->
+    <target name="clean" description="clean and create classes/jar dir, .ajesym files">
+      <!-- Delete all the directories and their contents -->
+      <delete quiet="on" dir="${ajc-compiled.dir}"/>
+      <delete quiet="on" dir="${preverified.dir}"/>
+      <delete quiet="on" dir="${midp-compiled.dir}"/>
+
+      <!-- Update the jar, don't delete it. This is only required for the 
+           Motorola application, which needs the extra property in the jad file -->    	
+      <delete quiet="on">
+	        <fileset dir="${jar.dir}" excludes="**/*.jad"/>
+      </delete>
+
+      <delete quiet="on">
+        <fileset dir="${workspace.dir}" includes="**/*.ajesym"/>
+      </delete>
+    	
+      <!-- Recreate the directories we just deleted -->
+      <mkdir dir="${ajc-compiled.dir}"/>
+      <mkdir dir="${preverified.dir}"/>
+      <mkdir dir="${midp-compiled.dir}"/>
+      <mkdir dir="${jar.dir}"/>
+    </target>
+
+    <!-- ============================================================= -->
+    <!-- Compile MIDP classes using standard midp (javac) compiler		-->
+    <!-- ============================================================= -->
+    <target name="midp-compile">
+    	<!-- For Motorola Build, only update jad so it includes property: iDEN-Midlet-Phone: MainUIMidlet10 -->
+        <wtkjad jadfile="${jar.dir}/${jad.name}" jarfile="${midp-compiled.dir}/${jar.name}" name="${midlet.name}" update="true" vendor="Lancaster University" version="1.0.0">
+            <midlet name="${midlet.name}" class="${main.class}"/>
+        </wtkjad>
+
+        <!-- Compile everything, but don't preverify (yet}. Use bootclasspath to override MIDP 1.0/CLDC 1.0 apis-->
+        <wtkbuild srcdir="${src.dir}" destdir="${midp-compiled.dir}" preverify="true" bootclasspath="${build.classpath};" >
+        	<includesfile name="${productVersion}"/>  
+        </wtkbuild>
+
+    	<!-- Package the compiled classes into a JAR and JAD file -->
+    	<wtkpackage jarfile="${midp-compiled.dir}/${jar.name}" jadfile="${jar.dir}/${jad.name}" obfuscate="false" preverify="false" >
+            <fileset dir="${workspace.dir}" includes="${main.class}.class"/>
+        </wtkpackage>
+    </target>
+
+	<!-- ============================================================= -->
+    <!-- Some Initialization tasks required for AspectJ Compiler Target	-->
+    <!-- ============================================================= -->	
+	<target name="aspectj-init">
+      <!-- Check the required libraries -->
+      <available file="${aspectjtools.jar}" property="aspectjtools.jar.available"/>
+      <available file="${aspectjrt.jar}" property="aspectjrt.jar.available"/>    	
+	
+      <!-- Sets name of new task to iajc, old task to ajc -->
+      <taskdef resource="org/aspectj/tools/ant/taskdefs/aspectjTaskdefs.properties" classpath="${aspectjtools.jar}"/>
+	  <property name="taskdefs.init" value="true"/>
+    <!-- targets to fail unless required libraries available -->
+     <!-- <fail message="expecting aspectjrt.jar or aspectjtools.jar at ${aspectjrt.jar} or "/> -->
+    </target>
+
+	
+	<!-- ============================================================= -->
+    <!-- Compile AspectJ Sources and weave with MIDP compiled Jar      -->
+    <!-- ============================================================= -->
+    <!-- For Blackberry builds, there is a bug that the AspectJ compile fails when it can't find rim libraries that
+         are not publicly available. The application will still build successfully if you continue with the rest of
+         the tasks. For now, failonerror=false is added to work around this -->
+    <target name="aspectj-compile" depends="aspectj-init" description="Uses AspectJ compiler to compile and weave">
+       <echo message="Compiling with ajc...(Disabled Import Errors, Will Proceed On Error)" />
+    	
+       <!-- can use ajc or iajc here -->
+       <!-- Do argfiles and sourceroots override each other?? sourceroots="${aspect-source.dir}"-->
+       <iajc destdir="${ajc-compiled.dir}" fork="true" proceedOnError="true" noimporterror="true" forkclasspath="${aspectjtools.jar}" classpath="${build.classpath};" argfiles="${workspace.dir}/${productVersion}" inpath="${midp-compiled.dir}" verbose="true" />
+    	<iajc version="true"/>
+    </target>
+
+	<!-- ============================================================= -->
+    <!-- Unjar the AspectJ Runtime Classes so they can be preverified  -->
+    <!-- ============================================================= -->		
+	<target name="copy-ajruntime-classes">
+		<unzip src="${aspectjrt.jar}" dest="${ajc-compiled.dir}"/>
+	</target>	
+	
+	<!-- ============================================================= -->
+    <!-- Copy Image Files so they are bundled with the jar file       -->
+    <!-- ============================================================= -->		
+	<target name="copy-image-files">
+      	<mkdir dir="${preverified.dir}/images"/>
+  		<copy todir="${preverified.dir}/images">
+    		<fileset dir="${images.dir}"/>
+  		</copy>
+	</target>	
+		
+	<!-- ============================================================= -->
+    <!-- Preverify MIDP classes, Aspects and the AspectJ Runtime Library-->
+    <!-- ============================================================= -->	
+	<target name="midp-preverify">
+		<!-- Note we have to include some classes from J2SE in order for the AspectJ runtime classes to preverify
+		     For now, the required classes are in the C:\Temp\Partial directory -->
+        <wtkpreverify srcdir="${ajc-compiled.dir}" destdir="${preverified.dir}" classpath="${build.classpath};${j2se};" />
+    </target>
+
+	<!-- ============================================================= -->
+    <!-- Generate the final JAR file that will run on MIDP devices and update JAD-->
+    <!-- ============================================================= -->		
+	<target name="make-jar">
+		<!-- Package the compiled classes into a JAR and JAD file -->
+    	<wtkpackage jarfile="${jar.dir}/${jar.name}" jadfile="${jar.dir}/${jad.name}" basedir="${preverified.dir}" obfuscate="false" preverify="false" >
+        </wtkpackage>
+	</target>
+	
+	<!-- ============================================================= -->
+    <!-- Run the Midlet in the standard Phone Emulator 					-->
+    <!-- ============================================================= -->		
+	<target name="run-default-phone-emulator">
+		<!-- Start the MIDlet suite -->
+		<wtkrun jadfile="jars/${jad.name}" device="DefaultColorPhone" wait="true" heapsize="2M"/>
+	</target>    		
+</project>
